@@ -1,0 +1,134 @@
+module Fervor where
+
+data Executor = native java.util.concurrent.Executor
+
+data InetSocketAddress = native java.net.InetSocketAddress where
+	native new :: Int -> STMutable s InetSocketAddress
+
+data HttpServer = native com.sun.net.httpserver.HttpServer where
+	native create "com.sun.net.httpserver.HttpServer.create" :: Mutable s InetSocketAddress -> Int -> STMutable s HttpServer throws IOException
+	native createContext :: MutableIO HttpServer -> String -> MutableIO Handler -> IO ()
+	native setExecutor :: MutableIO HttpServer -> Maybe Executor -> IO ()
+	native start :: MutableIO HttpServer -> IO ()
+
+native module where {
+	public static class Handler implements com.sun.net.httpserver.HttpHandler {
+		java.net.FileNameMap fileNameMap = java.net.URLConnection.getFileNameMap();
+
+		@Override
+		public void handle(com.sun.net.httpserver.HttpExchange t) throws java.io.IOException {
+			String targetPath = t.getRequestURI().getPath();
+
+			// Check if file exists
+			java.io.File fileFolder = new java.io.File(".");
+			java.io.File targetFile = new java.io.File(fileFolder, targetPath.replace('/', java.io.File.separatorChar));
+
+			java.text.SimpleDateFormat formatter = new java.text.SimpleDateFormat("yyyy.MM.dd-hh:mm:ss z", java.util.Locale.getDefault());
+
+			if (targetFile.exists()) {
+				// If it exists and it's a file, serve it
+				int bufLen = 10000 * 1024;
+				byte[] buf = new byte[bufLen];
+				int len = 0;
+				com.sun.net.httpserver.Headers responseHeaders = t.getResponseHeaders();
+
+				String mimeType = fileNameMap.getContentTypeFor(targetFile.toURI().toURL().toString());
+
+				if (targetFile.isDirectory() || targetFile.getName().endsWith(".html") || targetFile.getName().endsWith(".htm")) {
+					mimeType = "text/html; charset=UTF-8";
+				} else {
+					mimeType = "text/plain; charset=UTF-8";
+				}
+
+				responseHeaders.set("Content-Type", mimeType);
+				//logger.log(java.util.logging.Level.ALL, "Server Directory Listing:" + targetFile.getAbsolutePath());
+				//accessLogger.log(java.util.logging.Level.ALL, "Server Directory Listing:" + targetFile.getAbsolutePath());
+
+				if (targetFile.isFile()) {
+					t.sendResponseHeaders(200, targetFile.length());
+					java.io.FileInputStream fileIn = new java.io.FileInputStream(targetFile);
+					java.io.OutputStream out = t.getResponseBody();
+
+					while ((len = fileIn.read(buf, 0, bufLen)) != -1) {
+						out.write(buf, 0, len);
+					}
+
+					out.close();
+					fileIn.close();
+				} else if (targetFile.isDirectory()) {
+					java.io.File files[] = targetFile.listFiles();
+					StringBuffer sb = new StringBuffer();
+					sb.append("\n<html>");
+					sb.append("\n<head>");
+					sb.append("\n<style>");
+					sb.append("\n</style>");
+					sb.append("\n<title>List of files/dirs under /scratch/mseelam/view_storage/mseelam_otd1/otd_test/./work</title>");
+					sb.append("\n</head>");
+					sb.append("\n<body>");
+					sb.append("\n<div class=\"datagrid\">");
+					sb.append("\n<table>");
+					sb.append("\n<caption>Directory Listing</caption>");
+					sb.append("\n<thead>");
+					sb.append("\n	<tr>");
+					sb.append("\n		<th>File</th>");
+					sb.append("\n		<th>Dir ?</th>");
+					sb.append("\n		<th>Size</th>");
+					sb.append("\n		<th>Date</th>");
+					sb.append("\n	</tr>");
+					sb.append("\n</thead>");
+					sb.append("\n<tfoot>");
+					sb.append("\n	<tr>");
+					sb.append("\n		<th>File</th>");
+					sb.append("\n		<th>Dir ?</th>");
+					sb.append("\n		<th>Size</th>");
+					sb.append("\n		<th>Date</th>");
+					sb.append("\n	</tr>");
+					sb.append("\n</tfoot>");
+					sb.append("\n<tbody>");
+
+					int numberOfFiles = files.length;
+
+					for (int i = 0; i < numberOfFiles; i++) {
+						//System.out.println("In Work:" + f.getAbsolutePath());
+						if (i % 2 == 0) sb.append("\n\t<tr class='alt'>");
+						else sb.append("\n\t<tr>");
+						if (files[i].isDirectory()) sb.append("\n\t\t<td><a href='" + targetPath + files[i].getName() + "/'>" + files[i].getName() + "</a></td>" +
+							"<td>Y</td>" + "<td>" + files[i].length() +
+							"</td>" + "<td>" + formatter.format(new java.util.Date(files[i].lastModified())) + "</td>\n\t</tr>");
+						else sb.append("\n\t\t<td><a href='" + targetPath + files[i].getName() + "'>" + files[i].getName() + "</a></td>" +
+							"<td> </td>" + "<td>" + files[i].length() +
+							"</td>" + "<td>" + formatter.format(new java.util.Date(files[i].lastModified())) + "</td>\n\t</tr>");
+					}
+					sb.append("\n</tbody>");
+					sb.append("\n</table>");
+					sb.append("\n</div>");
+					sb.append("\n</body>");
+					sb.append("\n</html>");
+
+					t.sendResponseHeaders(200, sb.length());
+					java.io.OutputStream out = t.getResponseBody();
+					out.write(sb.toString().getBytes());
+					out.close();
+				}
+			} else {
+				// If it doesn't exist, send error
+				String message = "404 Not Found " + targetFile.getAbsolutePath();
+				t.sendResponseHeaders(404, 0);
+				java.io.OutputStream out = t.getResponseBody();
+				out.write(message.getBytes());
+				out.close();
+			}
+		}
+	}
+}
+
+data Handler = native Test.Handler where
+	native new :: () -> STMutable s Handler
+
+main args = do
+	println "Serving HTTP on 0.0.0.0 port 8000"
+	inet <- InetSocketAddress.new 8000
+	server <- HttpServer.create inet 0
+	handler <- Handler.new ()
+	server.createContext "/" handler
+	server.start
