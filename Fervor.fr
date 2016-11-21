@@ -1,134 +1,80 @@
 module Fervor where
 
-data Executor = native java.util.concurrent.Executor
+import fervor.Types
 
-data InetSocketAddress = native java.net.InetSocketAddress where
-	native new :: Int -> STMutable s InetSocketAddress
+import frege.Prelude hiding (OutputStream)
 
-data HttpServer = native com.sun.net.httpserver.HttpServer where
-	native create "com.sun.net.httpserver.HttpServer.create" :: Mutable s InetSocketAddress -> Int -> STMutable s HttpServer throws IOException
-	native createContext :: MutableIO HttpServer -> String -> MutableIO Handler -> IO ()
-	native setExecutor :: MutableIO HttpServer -> Maybe Executor -> IO ()
-	native start :: MutableIO HttpServer -> IO ()
+footer :: String
+footer = unlines ["</tbody>", "</table>", "</div>", "</body>", "</html>"]
 
-native module where {
-	public static class Handler implements com.sun.net.httpserver.HttpHandler {
-		java.net.FileNameMap fileNameMap = java.net.URLConnection.getFileNameMap();
+writeResponse :: MutableIO HttpExchange -> Int -> String -> IO ()
+writeResponse t res message = do
+	let len = if res == 404 then 0 else (length message).long
+	t.sendResponseHeaders res len
+	os <- t.getResponseBody
+	bytes <- StringAsBytes.getBytes message
+	os.write bytes
+	os.close
 
-		@Override
-		public void handle(com.sun.net.httpserver.HttpExchange t) throws java.io.IOException {
-			String targetPath = t.getRequestURI().getPath();
+display404 :: MutableIO HttpExchange -> String -> IO ()
+display404 t path = do
+	let message = "404 Not Found " ++ path
+	writeResponse t 404 message
 
-			// Check if file exists
-			java.io.File fileFolder = new java.io.File(".");
-			java.io.File targetFile = new java.io.File(fileFolder, targetPath.replace('/', java.io.File.separatorChar));
+setResponseHeaders :: MutableIO HttpExchange -> MutableIO File -> IO ()
+setResponseHeaders t file = do
+	responseHeaders <- t.getResponseHeaders
+	htmlMime <- isHtmlMime file
+	let mimeType = if htmlMime then "text/html; charset=UTF-8" else "text/plain; charset=UTF-8"
+	responseHeaders.set "Content-Type" mimeType
 
-			java.text.SimpleDateFormat formatter = new java.text.SimpleDateFormat("yyyy.MM.dd-hh:mm:ss z", java.util.Locale.getDefault());
+showFileList :: MutableIO File -> IO String
+showFileList file = do
+	header <- readFile "header.html"
+	array <- file.list
+	path <- file.getPath
+	fileList <- listFiles array path
+	return (header ++ fileList ++ footer)
 
-			if (targetFile.exists()) {
-				// If it exists and it's a file, serve it
-				int bufLen = 10000 * 1024;
-				byte[] buf = new byte[bufLen];
-				int len = 0;
-				com.sun.net.httpserver.Headers responseHeaders = t.getResponseHeaders();
+listFiles :: Maybe (MutableIO (JArray String)) -> String -> IO String
+listFiles files path = case files of
+					Just f -> formatFileList f path
+					Nothing -> return ""
 
-				String mimeType = fileNameMap.getContentTypeFor(targetFile.toURI().toURL().toString());
+formatFileList :: MutableIO (JArray String) -> String -> IO String
+formatFileList files path = do
+	ls <- readonly toList files
+	return (unlines $ map (format path) ls)
 
-				if (targetFile.isDirectory() || targetFile.getName().endsWith(".html") || targetFile.getName().endsWith(".htm")) {
-					mimeType = "text/html; charset=UTF-8";
-				} else {
-					mimeType = "text/plain; charset=UTF-8";
-				}
+format :: String -> String -> String
+format path s = "\n\t\t<td><a href='" ++ path ++ s ++ "'>" ++ s ++ "</a></td>" ++ "<td> </td>" ++ "<td>" ++ (show s.length) ++ "</td>" ++ "<td> </td>\n\t</tr>"
 
-				responseHeaders.set("Content-Type", mimeType);
-				//logger.log(java.util.logging.Level.ALL, "Server Directory Listing:" + targetFile.getAbsolutePath());
-				//accessLogger.log(java.util.logging.Level.ALL, "Server Directory Listing:" + targetFile.getAbsolutePath());
+processPage :: MutableIO HttpExchange -> MutableIO File -> IO ()
+processPage t file = do
+	setResponseHeaders t file
+	isFile <- file.isFile
+	page <- if isFile then (file.getName >>= readFile) else (showFileList file)
+	writeResponse t 200 page
 
-				if (targetFile.isFile()) {
-					t.sendResponseHeaders(200, targetFile.length());
-					java.io.FileInputStream fileIn = new java.io.FileInputStream(targetFile);
-					java.io.OutputStream out = t.getResponseBody();
+isHtmlMime :: MutableIO File -> IO Bool
+isHtmlMime file = do
+	isDirectory <- file.isDirectory
+	fileName <- file.getName
+	return $ isDirectory || fileName.contains ".htm"
 
-					while ((len = fileIn.read(buf, 0, bufLen)) != -1) {
-						out.write(buf, 0, len);
-					}
-
-					out.close();
-					fileIn.close();
-				} else if (targetFile.isDirectory()) {
-					java.io.File files[] = targetFile.listFiles();
-					StringBuffer sb = new StringBuffer();
-					sb.append("\n<html>");
-					sb.append("\n<head>");
-					sb.append("\n<style>");
-					sb.append("\n</style>");
-					sb.append("\n<title>List of files/dirs under /scratch/mseelam/view_storage/mseelam_otd1/otd_test/./work</title>");
-					sb.append("\n</head>");
-					sb.append("\n<body>");
-					sb.append("\n<div class=\"datagrid\">");
-					sb.append("\n<table>");
-					sb.append("\n<caption>Directory Listing</caption>");
-					sb.append("\n<thead>");
-					sb.append("\n	<tr>");
-					sb.append("\n		<th>File</th>");
-					sb.append("\n		<th>Dir ?</th>");
-					sb.append("\n		<th>Size</th>");
-					sb.append("\n		<th>Date</th>");
-					sb.append("\n	</tr>");
-					sb.append("\n</thead>");
-					sb.append("\n<tfoot>");
-					sb.append("\n	<tr>");
-					sb.append("\n		<th>File</th>");
-					sb.append("\n		<th>Dir ?</th>");
-					sb.append("\n		<th>Size</th>");
-					sb.append("\n		<th>Date</th>");
-					sb.append("\n	</tr>");
-					sb.append("\n</tfoot>");
-					sb.append("\n<tbody>");
-
-					int numberOfFiles = files.length;
-
-					for (int i = 0; i < numberOfFiles; i++) {
-						//System.out.println("In Work:" + f.getAbsolutePath());
-						if (i % 2 == 0) sb.append("\n\t<tr class='alt'>");
-						else sb.append("\n\t<tr>");
-						if (files[i].isDirectory()) sb.append("\n\t\t<td><a href='" + targetPath + files[i].getName() + "/'>" + files[i].getName() + "</a></td>" +
-							"<td>Y</td>" + "<td>" + files[i].length() +
-							"</td>" + "<td>" + formatter.format(new java.util.Date(files[i].lastModified())) + "</td>\n\t</tr>");
-						else sb.append("\n\t\t<td><a href='" + targetPath + files[i].getName() + "'>" + files[i].getName() + "</a></td>" +
-							"<td> </td>" + "<td>" + files[i].length() +
-							"</td>" + "<td>" + formatter.format(new java.util.Date(files[i].lastModified())) + "</td>\n\t</tr>");
-					}
-					sb.append("\n</tbody>");
-					sb.append("\n</table>");
-					sb.append("\n</div>");
-					sb.append("\n</body>");
-					sb.append("\n</html>");
-
-					t.sendResponseHeaders(200, sb.length());
-					java.io.OutputStream out = t.getResponseBody();
-					out.write(sb.toString().getBytes());
-					out.close();
-				}
-			} else {
-				// If it doesn't exist, send error
-				String message = "404 Not Found " + targetFile.getAbsolutePath();
-				t.sendResponseHeaders(404, 0);
-				java.io.OutputStream out = t.getResponseBody();
-				out.write(message.getBytes());
-				out.close();
-			}
-		}
-	}
-}
-
-data Handler = native Test.Handler where
-	native new :: () -> STMutable s Handler
+handle :: MutableIO HttpExchange -> IO ()
+handle t = do
+	uri <- t.getRequestURI
+	targetPath <- uri.getPath
+	fileFolder <- File.new "."
+	targetFile <- File.new fileFolder (targetPath.replace '/' fileSeparator)
+	targetExists <- targetFile.exists
+	if targetExists then processPage t targetFile else (targetFile.getPath >>= \path -> display404 t path) 
 
 main args = do
-	println "Serving HTTP on 0.0.0.0 port 8000"
 	inet <- InetSocketAddress.new 8000
 	server <- HttpServer.create inet 0
-	handler <- Handler.new ()
+	handler <- HttpHandler.new handle
 	server.createContext "/" handler
 	server.start
+	println "Serving HTTP on 0.0.0.0 port 8000"
