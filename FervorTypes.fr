@@ -1,6 +1,8 @@
 module fervor.Types where
 
-import frege.Prelude hiding (OutputStream)
+import frege.Prelude hiding (File, OutputStream)
+
+type Handler = MutableIO HttpExchange -> IO ()
 
 data URI = native java.net.URI where
 	native getPath :: MutableIO URI -> IO String
@@ -46,7 +48,41 @@ data HttpExchange = native com.sun.net.httpserver.HttpExchange where
 
 data HttpHandler = native com.sun.net.httpserver.HttpHandler where
 	-- substitute for a constructor
-	native new fervor.Types.Handler.newInstance :: (MutableIO HttpExchange -> IO ()) -> STMutable s HttpHandler 
+	native new fervor.Types.Handler.newInstance :: Handler -> STMutable s HttpHandler 
+
+data File = native java.io.File where
+    native new                :: String -> STMutable s File
+                              |  Mutable s File -> String -> STMutable s File
+    pure native toURI         :: File -> URI
+    pure native getPathF  getPath    :: File -> String
+    
+    --- Separator for elements of a path name, i.e. "/" on Unix
+    pure native separator        java.io.File.separator
+                              :: String
+    --- Separator for elements of a path, i.e. ":" on Unix
+    pure native pathSeparator    java.io.File.pathSeparator
+                              :: String
+    --- The (relative) path name. Not necessarily valid.
+    native getPath       :: MutableIO File -> IO String
+    native getAbsolutePath :: MutableIO File -> IO String
+    native getCanonicalPath :: MutableIO File -> IO String throws IOException
+    native getName       :: MutableIO File -> IO String
+    native canRead       :: MutableIO File -> IO Bool
+    native canWrite      :: MutableIO File -> IO Bool
+    native isAbsolute    :: MutableIO File -> IO Bool
+    native isDirectory   :: MutableIO File -> IO Bool
+    native isFile        :: MutableIO File -> IO Bool
+    native exists        :: MutableIO File -> IO Bool
+    native mkdirs        :: MutableIO File -> IO Bool
+    native delete        :: MutableIO File -> IO Bool
+    native renameTo      :: MutableIO File -> MutableIO File -> IO Bool
+    native lastModified  :: MutableIO File -> IO Long
+    native length        :: MutableIO File -> IO Long
+    native getParentFile :: MutableIO File -> IO (Maybe (MutableIO File))
+    native list          :: MutableIO File -> IO (Maybe (MutableIO (JArray String)))
+    native createTempFile java.io.File.createTempFile
+                         :: String -> String -> IOMutable File
+                                                throws IOException
 
 pure native fileSeparator "java.io.File.separatorChar" :: Char
 
