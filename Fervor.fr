@@ -2,10 +2,18 @@ module Fervor where
 
 import fervor.Types
 
-import frege.Prelude hiding (OutputStream)
+import frege.Prelude hiding (File, OutputStream)
+
+data FileAttributes = Attributes {name:: String, isDirectory :: Bool, size:: Long}
 
 footer :: String
 footer = unlines ["</tbody>", "</table>", "</div>", "</body>", "</html>"]
+
+header :: String
+header = unlines ["<html>", "<head>", "<title> List of files/dirs </title>", "</head>", "<body>", "<h1>File List</h1>", "<table>",
+          "<caption>Directory Listing</caption>", "<thead>", "<tr>", "<th>File</th>", "<th> Dir ? </th>", "<th>Size</th>",
+		  "<th>Date</th>", "</tr>", "</thead>", "<tfoot>", "<tr>", "<th>File</th>", "<th>Dir ?</th>", "<th> Size</th>",
+		  "<th>Date</th>", "</tr>", "</tfoot>", "<tbody>"]
 
 writeResponse :: MutableIO HttpExchange -> Int -> String -> IO ()
 writeResponse t res message = do
@@ -28,33 +36,41 @@ setResponseHeaders t file = do
 	let mimeType = if htmlMime then "text/html; charset=UTF-8" else "text/plain; charset=UTF-8"
 	responseHeaders.set "Content-Type" mimeType
 
-showFileList :: MutableIO File -> IO String
-showFileList file = do
-	header <- readFile "header.html"
-	array <- file.list
-	path <- file.getPath
-	fileList <- listFiles array path
-	return (header ++ fileList ++ footer)
+showFileList :: String -> [FileAttributes] -> String
+showFileList path fileList = header ++ (unlines $ map (format path) fileList) ++ footer
 
-listFiles :: Maybe (MutableIO (JArray String)) -> String -> IO String
-listFiles files path = case files of
-					Just f -> formatFileList f path
-					Nothing -> return ""
+format :: String -> FileAttributes -> String
+format path f = "\n\t\t<td> <a href='" ++ path ++ f.name ++ 
+			    (if f.isDirectory then "/" else "") ++ "'>" ++ f.name ++ "</a></td>" ++
+				"<td>" ++ (if f.isDirectory then "Y" else "N") ++ "</td>" ++
+				"<td>" ++ (show f.size) ++ "</td>" ++ "<td> </td>\n\t</tr>"
 
-formatFileList :: MutableIO (JArray String) -> String -> IO String
-formatFileList files path = do
-	ls <- readonly toList files
-	return (unlines $ map (format path) ls)
-
-format :: String -> String -> String
-format path s = "\n\t\t<td><a href='" ++ path ++ s ++ "'>" ++ s ++ "</a></td>" ++ "<td> </td>" ++ "<td>" ++ (show s.length) ++ "</td>" ++ "<td> </td>\n\t</tr>"
-
-processPage :: MutableIO HttpExchange -> MutableIO File -> IO ()
-processPage t file = do
+processPage :: MutableIO HttpExchange -> String -> MutableIO File -> IO ()
+processPage t path file = do
 	setResponseHeaders t file
 	isFile <- file.isFile
-	page <- if isFile then (file.getName >>= readFile) else (showFileList file)
+	page <- if isFile then (file.getName >>= readFile) else (getAttributeList file >>= \a -> return (showFileList path a))
 	writeResponse t 200 page
+
+getAttributeList :: MutableIO File -> IO [FileAttributes]
+getAttributeList f = do
+	(Just files) <- f.list
+	ls <- readonly toList files
+	lif <- listFileAttribute (\x -> x.isDirectory) ls
+	lfs <- listFileAttribute (\x -> x.length) ls
+	let ls' = map (\(a, b, c) -> Attributes {name = a, isDirectory = b, size = c}) (zip3 ls (reverse lif) (reverse lfs))
+	return ls'
+
+listFileAttribute :: (MutableIO File -> IO a) -> [String] -> IO [a]
+listFileAttribute f xs = listFileAttribute' f xs (return [])
+
+listFileAttribute' :: (MutableIO File -> IO a) -> [String] -> IO [a] -> IO [a]
+listFileAttribute' _ [] xs = xs
+listFileAttribute' attr (f:fs) xs = do
+	file <- File.new f
+	isfile <- attr file
+	lst <- xs
+	listFileAttribute' attr fs (return (isfile : lst))
 
 isHtmlMime :: MutableIO File -> IO Bool
 isHtmlMime file = do
@@ -62,14 +78,14 @@ isHtmlMime file = do
 	fileName <- file.getName
 	return $ isDirectory || fileName.contains ".htm"
 
-handle :: MutableIO HttpExchange -> IO ()
+handle :: Handler
 handle t = do
 	uri <- t.getRequestURI
 	targetPath <- uri.getPath
 	fileFolder <- File.new "."
 	targetFile <- File.new fileFolder (targetPath.replace '/' fileSeparator)
 	targetExists <- targetFile.exists
-	if targetExists then processPage t targetFile else (targetFile.getPath >>= \path -> display404 t path) 
+	if targetExists then processPage t targetPath targetFile else (targetFile.getPath >>= \path -> display404 t path) 
 
 main args = do
 	inet <- InetSocketAddress.new 8000
