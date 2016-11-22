@@ -29,34 +29,42 @@ display404 t path = do
 	let message = "404 Not Found " ++ path
 	writeResponse t 404 message
 
-setResponseHeaders :: MutableIO HttpExchange -> MutableIO File -> IO ()
+setResponseHeaders :: MutableIO HttpExchange -> String -> IO ()
 setResponseHeaders t file = do
 	responseHeaders <- t.getResponseHeaders
-	htmlMime <- isHtmlMime file
+	let htmlMime = isHtmlMime file
 	let mimeType = if htmlMime then "text/html; charset=UTF-8" else "text/plain; charset=UTF-8"
 	responseHeaders.set "Content-Type" mimeType
+
+isHtmlMime :: String -> Bool
+isHtmlMime fileName = (isFolder fileName) || fileName.contains ".htm"
+
 
 showFileList :: String -> [FileAttributes] -> String
 showFileList path fileList = header ++ (unlines $ map (format path) fileList) ++ footer
 
 format :: String -> FileAttributes -> String
-format path f = "\n\t\t<td> <a href='" ++ path ++ f.name ++ 
-			    (if f.isDirectory then "/" else "") ++ "'>" ++ f.name ++ "</a></td>" ++
-				"<td>" ++ (if f.isDirectory then "Y" else "N") ++ "</td>" ++
+format path f = "\n\t<tr>\n\t\t<td> <a href='" ++ path ++ f.name ++ 
+			    (if (isFolder f.name) then "/" else "") ++ "'>" ++ f.name ++ "</a></td>" ++
+				"<td>" ++ (if (isFolder f.name) then "Y" else "N") ++ "</td>" ++
 				"<td>" ++ (show f.size) ++ "</td>" ++ "<td> </td>\n\t</tr>"
+
+isFolder :: String -> Bool
+isFolder s = (not(s.contains ".")) || (s.startsWith ".")
 
 processPage :: MutableIO HttpExchange -> String -> MutableIO File -> IO ()
 processPage t path file = do
-	setResponseHeaders t file
+	fileName <- file.getName
+	setResponseHeaders t fileName
 	isFile <- file.isFile
-	page <- if isFile then (file.getName >>= readFile) else (getAttributeList file >>= \a -> return (showFileList path a))
+	page <- if isFile then (file.getAbsolutePath >>= readFile) else (getAttributeList file >>= \a -> return (showFileList path a))
 	writeResponse t 200 page
 
 getAttributeList :: MutableIO File -> IO [FileAttributes]
 getAttributeList f = do
 	(Just files) <- f.list
 	ls <- readonly toList files
-	lif <- listFileAttribute (\x -> x.isDirectory) ls
+	let lif = map isFolder ls
 	lfs <- listFileAttribute (\x -> x.length) ls
 	let ls' = map (\(a, b, c) -> Attributes {name = a, isDirectory = b, size = c}) (zip3 ls (reverse lif) (reverse lfs))
 	return ls'
@@ -72,14 +80,9 @@ listFileAttribute' attr (f:fs) xs = do
 	lst <- xs
 	listFileAttribute' attr fs (return (isfile : lst))
 
-isHtmlMime :: MutableIO File -> IO Bool
-isHtmlMime file = do
-	isDirectory <- file.isDirectory
-	fileName <- file.getName
-	return $ isDirectory || fileName.contains ".htm"
-
 handle :: Handler
 handle t = do
+	println "Handling"
 	uri <- t.getRequestURI
 	targetPath <- uri.getPath
 	fileFolder <- File.new "."
